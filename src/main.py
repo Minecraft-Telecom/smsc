@@ -25,6 +25,7 @@ async def main():
             # Wait for incoming SMS messages
             incoming = await smpp_adapter.receive_sms()
             print(f"Received SMS: {incoming.sender} -> {incoming.recipient}: {incoming.message}")
+            await smpp_adapter.send_sms(incoming)
             
             # Example: Echo the message back (requires a bound receiver)
             # await smpp_adapter.send_sms(incoming)

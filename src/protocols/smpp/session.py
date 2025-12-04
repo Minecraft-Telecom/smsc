@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-import uuid
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Callable, Coroutine, Any
@@ -32,7 +31,8 @@ class SessionState(Enum):
 
 
 # Type alias for message handlers
-MessageHandler = Callable[["SMPPSession", SubmitSM], Coroutine[Any, Any, None]]
+# Returns optional message_id string (for submit_sm response)
+MessageHandler = Callable[["SMPPSession", SubmitSM], Coroutine[Any, Any, str | None]]
 
 
 @dataclass
@@ -197,13 +197,12 @@ class SMPPSession:
             ))
             return
 
-        # Generate message ID
-        message_id = str(uuid.uuid4())[:8]
+        message_id = ""
 
-        # Notify handler
+        # Notify handler and get message ID
         if self.on_message:
             try:
-                await self.on_message(self, pdu)
+                message_id = await self.on_message(self, pdu) or ""
             except Exception as e:
                 logger.error(f"Message handler error: {e}")
                 await self._send_response(SubmitSMResp(
@@ -213,7 +212,7 @@ class SMPPSession:
                 ))
                 return
 
-        # Send success response
+        # Send success response with message ID
         await self._send_response(SubmitSMResp(
             sequence_number=pdu.sequence_number,
             message_id=message_id
@@ -224,9 +223,14 @@ class SMPPSession:
                               source_ton: TON = TON.INTERNATIONAL,
                               source_npi: NPI = NPI.ISDN,
                               dest_ton: TON = TON.INTERNATIONAL,
-                              dest_npi: NPI = NPI.ISDN) -> bool:
+                              dest_npi: NPI = NPI.ISDN,
+                              esm_class: int = 0) -> bool:
         """
         Send a message to the connected client (deliver_sm).
+        
+        Args:
+            esm_class: ESM class field. Use 0x04 for delivery receipts.
+        
         Returns True if acknowledged successfully.
         """
         if self.state not in (SessionState.BOUND_RX, SessionState.BOUND_TRX):
@@ -242,7 +246,8 @@ class SMPPSession:
             dest_addr_ton=dest_ton,
             dest_addr_npi=dest_npi,
             short_message=message,
-            data_coding=data_coding
+            data_coding=data_coding,
+            esm_class=esm_class
         )
 
         try:
