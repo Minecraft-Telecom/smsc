@@ -11,8 +11,8 @@ class SMSMessage:
 
 class SMSQueue:
     def __init__(self):
-        self.outgoing = Queue()
-        self.incoming = Queue()
+        self.outgoing: Queue[SMSMessage] = Queue()
+        self.incoming: Queue[SMSMessage] = Queue()
 
     async def send(self, sms: SMSMessage):
         await self.outgoing.put(sms)
