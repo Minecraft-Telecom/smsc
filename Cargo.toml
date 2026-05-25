@@ -1,15 +1,5 @@
-[package]
-name = "smsc"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-futures = "0.3.32"
-rusmpp = { version = "0.4.0", features = ["tokio-codec", "tracing"] }
-serde = { version = "1.0.228", features = ["derive"] }
-tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "signal", "sync"] }
-tokio-stream = { version = "0.1.18", features = ["net"] }
-tokio-util = { version = "0.7.18", features = ["codec"] }
-toml = "1.1.2"
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+[workspace]
+resolver = "3"
+members = [
+    "adapters/smpp",
+]
