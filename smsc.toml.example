@@ -1,0 +1,14 @@
+bind_addr = "0.0.0.0:2775"
+max_pdu_length = 8192
+idle_timeout_secs = 300
+max_connections = 1024
+server_system_id = "smsc"
+log_filter = "smsc=info,rusmpp=info"
+
+[[credentials]]
+system_id = "NfDfddEKVI0NCxO"
+password = "rEZYMq5j"
+
+[[credentials]]
+system_id = "client2"
+password = "secret2"
