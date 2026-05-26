@@ -10,6 +10,7 @@ use rusmpp::tokio_codec::{DecodeError, EncodeError};
 pub enum SessionError {
     Decode(DecodeError),
     Encode(EncodeError),
+    ReceiptOverflow,
 }
 
 impl std::fmt::Display for SessionError {
@@ -17,6 +18,7 @@ impl std::fmt::Display for SessionError {
         match self {
             SessionError::Decode(err) => write!(f, "decode error: {err}"),
             SessionError::Encode(err) => write!(f, "encode error: {err}"),
+            SessionError::ReceiptOverflow => write!(f, "delivery receipt text overflow"),
         }
     }
 }

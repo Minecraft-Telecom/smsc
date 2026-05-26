@@ -4,6 +4,7 @@ use futures::StreamExt;
 use tokio::net::TcpListener;
 use tokio::sync::{watch, Semaphore};
 use tokio_stream::wrappers::TcpListenerStream;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::config::Config;
@@ -38,7 +39,7 @@ pub struct Server {
 
 impl Server {
     pub fn new(config: Config) -> Self {
-        let queue: Arc<dyn MessageQueue> = Arc::new(StubQueue::new());
+        let queue: Arc<dyn MessageQueue> = Arc::new(StubQueue::new(config.queue_broadcast_capacity));
 
         Self {
             config: Arc::new(config),
@@ -50,6 +51,7 @@ impl Server {
         let listener = TcpListener::bind(self.config.bind_addr).await?;
         let mut incoming = TcpListenerStream::new(listener);
         let limiter = Arc::new(Semaphore::new(self.config.max_connections));
+        let cancellation_token = CancellationToken::new();
 
         info!(
             bind_addr = %self.config.bind_addr,
@@ -62,6 +64,7 @@ impl Server {
                 _ = shutdown.changed() => {
                     if *shutdown.borrow() {
                         info!("shutdown signal received");
+                        cancellation_token.cancel();
                         break;
                     }
                 }
@@ -83,11 +86,15 @@ impl Server {
                         }
                     };
 
-                    let permit = match limiter.clone().acquire_owned().await {
-                        Ok(permit) => permit,
-                        Err(_) => {
-                            warn!("connection limiter closed");
+                    let permit = tokio::select! {
+                        _ = shutdown.changed() => {
+                            info!("shutdown during permit wait");
+                            cancellation_token.cancel();
                             break;
+                        }
+                        res = limiter.clone().acquire_owned() => match res {
+                            Ok(p) => p,
+                            Err(_) => { warn!("connection limiter closed"); break; }
                         }
                     };
 
@@ -97,11 +104,12 @@ impl Server {
 
                     let config = Arc::clone(&self.config);
                     let queue = Arc::clone(&self.queue);
+                    let session_token = cancellation_token.clone();
 
                     tokio::spawn(async move {
                         let _permit = permit;
 
-                        if let Err(err) = run_session(stream, peer, config, queue).await {
+                        if let Err(err) = run_session(stream, peer, config, queue, session_token).await {
                             warn!(?err, "session terminated with error");
                         }
                     });

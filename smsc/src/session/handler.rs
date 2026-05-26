@@ -111,7 +111,7 @@ pub(super) async fn handle_command(
 
             if status == CommandStatus::EsmeRok && wants_receipt {
                 if state.allows_rx() {
-                    let deliver = build_delivery_receipt(&submit, &message_id);
+                    let deliver = build_delivery_receipt(&submit, &message_id)?;
                     let sequence = next_sequence_number(next_sequence);
                     let receipt = Command::new(CommandStatus::EsmeRok, sequence, deliver);
                     send_command(framed, peer, receipt).await?;
@@ -128,17 +128,7 @@ pub(super) async fn handle_command(
         Pdu::GenericNack => {
             debug!("received generic_nack");
         }
-        Pdu::UnbindResp
-        | Pdu::EnquireLinkResp
-        | Pdu::BindReceiverResp(_)
-        | Pdu::BindTransceiverResp(_)
-        | Pdu::BindTransmitterResp(_)
-        | Pdu::SubmitSmResp(_)
-        | Pdu::CancelSmResp
-        | Pdu::ReplaceSmResp
-        | Pdu::CancelBroadcastSmResp => {
-            debug!(command_id = ?command.id(), "ignoring unexpected response PDU");
-        }
+        // Responses are filtered in run.rs before handle_command is called.
         _ => {
             send_nack(framed, peer, sequence, CommandStatus::EsmeRinvcmdid).await?;
         }

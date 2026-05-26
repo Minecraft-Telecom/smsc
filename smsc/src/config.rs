@@ -8,8 +8,8 @@ const DEFAULT_BIND_ADDR: &str = "0.0.0.0:2775";
 const DEFAULT_MAX_PDU_LENGTH: usize = 8192;
 const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 300;
 const DEFAULT_MAX_CONNECTIONS: usize = 1024;
+const DEFAULT_BROADCAST_CAPACITY: usize = 1024;
 const DEFAULT_SYSTEM_ID: &str = "smsc";
-const DEFAULT_PASSWORD: &str = "password";
 const DEFAULT_LOG_FILTER: &str = "smsc=info,rusmpp=info";
 
 #[derive(Debug, Clone)]
@@ -18,6 +18,7 @@ pub struct Config {
     pub max_pdu_length: usize,
     pub idle_timeout: Duration,
     pub max_connections: usize,
+    pub queue_broadcast_capacity: usize,
     pub server_system_id: COctetString<1, 16>,
     pub credentials: Vec<Credential>,
     pub log_filter: String,
@@ -41,6 +42,9 @@ pub enum ConfigError {
     ParseConfig { path: String, source: toml::de::Error },
     InvalidBindAddr(String),
     InvalidMaxPduLength(usize),
+    InvalidMaxConnections(usize),
+    InvalidQueueBroadcastCapacity(usize),
+    InvalidIdleTimeout(u64),
     InvalidServerSystemId(String),
     MissingCredentials,
     InvalidCredential {
@@ -64,6 +68,15 @@ impl std::fmt::Display for ConfigError {
             }
             ConfigError::InvalidMaxPduLength(value) => {
                 write!(f, "max PDU length must be >= 16, got {value}")
+            }
+            ConfigError::InvalidMaxConnections(value) => {
+                write!(f, "max connections must be >= 1, got {value}")
+            }
+            ConfigError::InvalidQueueBroadcastCapacity(value) => {
+                write!(f, "queue broadcast capacity must be >= 1, got {value}")
+            }
+            ConfigError::InvalidIdleTimeout(value) => {
+                write!(f, "idle timeout seconds must be >= 1, got {value}")
             }
             ConfigError::InvalidServerSystemId(value) => {
                 write!(f, "invalid server_system_id: {value}")
@@ -90,6 +103,7 @@ struct ConfigFile {
     max_pdu_length: Option<usize>,
     idle_timeout_secs: Option<u64>,
     max_connections: Option<usize>,
+    queue_broadcast_capacity: Option<usize>,
     server_system_id: Option<String>,
     credentials: Option<Vec<CredentialFile>>,
     log_filter: Option<String>,
@@ -131,9 +145,20 @@ impl Config {
         }
 
         let idle_timeout_secs = file.idle_timeout_secs.unwrap_or(DEFAULT_IDLE_TIMEOUT_SECS);
+        if idle_timeout_secs == 0 {
+            return Err(ConfigError::InvalidIdleTimeout(0));
+        }
         let idle_timeout = Duration::from_secs(idle_timeout_secs);
 
         let max_connections = file.max_connections.unwrap_or(DEFAULT_MAX_CONNECTIONS);
+        if max_connections == 0 {
+            return Err(ConfigError::InvalidMaxConnections(0));
+        }
+
+        let queue_broadcast_capacity = file.queue_broadcast_capacity.unwrap_or(DEFAULT_BROADCAST_CAPACITY);
+        if queue_broadcast_capacity == 0 {
+            return Err(ConfigError::InvalidQueueBroadcastCapacity(0));
+        }
 
         let server_system_id_raw = file
             .server_system_id
@@ -141,45 +166,28 @@ impl Config {
         let server_system_id = COctetString::from_str(&server_system_id_raw)
             .map_err(|_| ConfigError::InvalidServerSystemId(server_system_id_raw))?;
 
-        let credentials_is_set = file.credentials.is_some();
         let credentials_raw = file.credentials.unwrap_or_default();
-        let credentials = if credentials_raw.is_empty() {
-            if credentials_is_set {
-                return Err(ConfigError::MissingCredentials);
-            }
-            let system_id = COctetString::from_str(DEFAULT_SYSTEM_ID)
-                .map_err(|_| ConfigError::InvalidServerSystemId(DEFAULT_SYSTEM_ID.to_string()))?;
-            let password = COctetString::from_str(DEFAULT_PASSWORD)
-                .map_err(|_| ConfigError::InvalidCredential {
-                    index: 0,
-                    field: "password",
-                    value: DEFAULT_PASSWORD.to_string(),
-                })?;
-            vec![Credential { system_id, password }]
-        } else {
-            let mut parsed = Vec::with_capacity(credentials_raw.len());
-            for (index, entry) in credentials_raw.into_iter().enumerate() {
-                let system_id = COctetString::from_str(&entry.system_id).map_err(|_| {
-                    ConfigError::InvalidCredential {
-                        index,
-                        field: "system_id",
-                        value: entry.system_id.clone(),
-                    }
-                })?;
-                let password = COctetString::from_str(&entry.password).map_err(|_| {
-                    ConfigError::InvalidCredential {
-                        index,
-                        field: "password",
-                        value: entry.password.clone(),
-                    }
-                })?;
-                parsed.push(Credential { system_id, password });
-            }
-            parsed
-        };
-
-        if credentials.is_empty() {
+        if credentials_raw.is_empty() {
             return Err(ConfigError::MissingCredentials);
+        }
+
+        let mut credentials = Vec::with_capacity(credentials_raw.len());
+        for (index, entry) in credentials_raw.into_iter().enumerate() {
+            let system_id = COctetString::from_str(&entry.system_id).map_err(|_| {
+                ConfigError::InvalidCredential {
+                    index,
+                    field: "system_id",
+                    value: entry.system_id.clone(),
+                }
+            })?;
+            let password = COctetString::from_str(&entry.password).map_err(|_| {
+                ConfigError::InvalidCredential {
+                    index,
+                    field: "password",
+                    value: entry.password.clone(),
+                }
+            })?;
+            credentials.push(Credential { system_id, password });
         }
 
         let log_filter = file
@@ -191,6 +199,7 @@ impl Config {
             max_pdu_length,
             idle_timeout,
             max_connections,
+            queue_broadcast_capacity,
             server_system_id,
             credentials,
             log_filter,

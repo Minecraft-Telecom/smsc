@@ -8,6 +8,7 @@ use tokio::net::TcpStream;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::time::{sleep, Instant};
 use tokio_util::codec::Framed;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::config::Config;
@@ -23,6 +24,7 @@ pub async fn run_session(
     peer: SocketAddr,
     config: Arc<Config>,
     queue: Arc<dyn MessageQueue>,
+    session_token: CancellationToken,
 ) -> Result<(), SessionError> {
     let codec = CommandCodec::new().with_max_length(config.max_pdu_length);
     let mut framed = Framed::new(stream, codec);
@@ -37,6 +39,10 @@ pub async fn run_session(
 
     loop {
         tokio::select! {
+            _ = session_token.cancelled() => {
+                info!(peer = %peer, "server shutdown, closing session");
+                return Ok(());
+            }
             _ = &mut idle_timer => {
                 info!(peer = %peer, "idle timeout, closing session");
                 return Ok(());
@@ -65,7 +71,6 @@ pub async fn run_session(
                         debug!(peer = %peer, "queue delivery channel closed");
                     }
                 }
-                idle_timer.as_mut().reset(Instant::now() + config.idle_timeout);
             }
             maybe_command = framed.next() => {
                 let command = match maybe_command {
@@ -77,7 +82,8 @@ pub async fn run_session(
                     }
                 };
 
-                info!(peer = %peer, command = ?command, "rx");
+                info!(peer = %peer, command_id = ?command.id(), sequence = command.sequence_number(), "rx");
+                debug!(peer = %peer, command = ?command, "rx detail");
                 idle_timer.as_mut().reset(Instant::now() + config.idle_timeout);
 
                 if command.id().is_response() {

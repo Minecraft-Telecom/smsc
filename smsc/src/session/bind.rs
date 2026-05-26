@@ -25,7 +25,7 @@ pub(super) async fn handle_bind(
     sequence: u32,
 ) -> Result<(), SessionError> {
     if *state != BindState::Unbound {
-        let response = bind_response(kind, config, CommandStatus::EsmeRalybnd, sequence);
+        let response = bind_response(kind, config, CommandStatus::EsmeRalybnd, sequence, interface_version);
         send_command(framed, peer, response).await?;
         return Ok(());
     }
@@ -51,32 +51,38 @@ pub(super) async fn handle_bind(
         "bind request processed"
     );
 
-    let response = bind_response(kind, config, status, sequence);
+    let response = bind_response(kind, config, status, sequence, interface_version);
     send_command(framed, peer, response).await?;
     Ok(())
 }
 
-fn bind_response(kind: BindKind, config: &Config, status: CommandStatus, sequence: u32) -> Command {
+fn bind_response(
+    kind: BindKind,
+    config: &Config,
+    status: CommandStatus,
+    sequence: u32,
+    interface_version: InterfaceVersion,
+) -> Command {
     let system_id = config.server_system_id.clone();
     let resp_pdu = match kind {
         BindKind::Transmitter => {
             let resp = BindTransmitterResp::builder()
                 .system_id(system_id)
-                .sc_interface_version(Some(InterfaceVersion::Smpp5_0))
+                .sc_interface_version(Some(interface_version))
                 .build();
             Pdu::BindTransmitterResp(resp)
         }
         BindKind::Receiver => {
             let resp = BindReceiverResp::builder()
                 .system_id(system_id)
-                .sc_interface_version(Some(InterfaceVersion::Smpp5_0))
+                .sc_interface_version(Some(interface_version))
                 .build();
             Pdu::BindReceiverResp(resp)
         }
         BindKind::Transceiver => {
             let resp = BindTransceiverResp::builder()
                 .system_id(system_id)
-                .sc_interface_version(Some(InterfaceVersion::Smpp5_0))
+                .sc_interface_version(Some(interface_version))
                 .build();
             Pdu::BindTransceiverResp(resp)
         }

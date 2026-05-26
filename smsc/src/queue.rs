@@ -39,12 +39,18 @@ pub struct StubQueue {
 }
 
 impl StubQueue {
-    pub fn new() -> Self {
-        let (tx, _rx) = broadcast::channel(1024);
+    pub fn new(capacity: usize) -> Self {
+        let (tx, _rx) = broadcast::channel(capacity);
         Self {
             next_id: AtomicU64::new(1),
             tx,
         }
+    }
+}
+
+impl Default for StubQueue {
+    fn default() -> Self {
+        Self::new(1024)
     }
 }
 

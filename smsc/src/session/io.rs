@@ -24,6 +24,7 @@ pub(super) async fn send_command(
     peer: SocketAddr,
     command: Command,
 ) -> Result<(), SessionError> {
-    info!(peer = %peer, command = ?command, "tx");
+    info!(peer = %peer, command_id = ?command.id(), sequence = command.sequence_number(), "tx");
+    tracing::debug!(peer = %peer, command = ?command, "tx detail");
     framed.send(command).await.map_err(SessionError::Encode)
 }

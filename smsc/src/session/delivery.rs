@@ -39,19 +39,17 @@ pub(super) fn build_deliver_sm(message: &QueueMessage) -> DeliverSm {
 pub(super) fn build_delivery_receipt(
     submit: &SubmitSm,
     message_id: &COctetString<1, 65>,
-) -> DeliverSm {
+) -> Result<DeliverSm, crate::session::SessionError> {
     let esm_class = EsmClass {
         message_type: MessageType::ShortMessageContainsMCDeliveryReceipt,
         ..EsmClass::default()
     };
 
     let receipt_text = format!("id:{} stat:DELIVRD", message_id.as_str());
-    let short_message =
-        OctetString::from_slice(receipt_text.as_bytes()).unwrap_or_else(|_| {
-            OctetString::from_static_slice(b"").expect("empty receipt must fit")
-        });
+    let short_message = OctetString::from_slice(receipt_text.as_bytes())
+        .map_err(|_| crate::session::SessionError::ReceiptOverflow)?;
 
-    DeliverSm::builder()
+    Ok(DeliverSm::builder()
         .service_type(submit.service_type.clone())
         .source_addr_ton(submit.dest_addr_ton)
         .source_addr_npi(submit.dest_addr_npi)
@@ -75,5 +73,5 @@ pub(super) fn build_delivery_receipt(
         .push_tlv(MessageDeliveryRequestTlvValue::MessageState(
             MessageState::Delivered,
         ))
-        .build()
+        .build())
 }
