@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 futures = "0.3.32"
-rusmpp = { version = "0.4.0", features = ["tokio-codec", "tracing"] }
+rusmpp = { git = "https://github.com/Rusmpp/Rusmpp.git", rev = "d0ac3f6", features = ["tokio-codec", "tracing"] }
 serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "signal", "sync"] }
 tokio-stream = { version = "0.1.18", features = ["net"] }
