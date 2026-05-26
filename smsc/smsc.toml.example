@@ -1,7 +1,12 @@
 bind_addr = "0.0.0.0:2775"
 max_pdu_length = 8192
 idle_timeout_secs = 300
+bind_timeout_secs = 30
+deliver_response_timeout_secs = 30
 max_connections = 1024
+max_connections_per_ip = 32
+max_bind_failures = 3
+max_pending_deliveries = 16
 server_system_id = "smsc"
 log_filter = "smsc=info,rusmpp=info"
 

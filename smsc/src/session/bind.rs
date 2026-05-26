@@ -11,7 +11,7 @@ use tracing::{debug, warn};
 use crate::config::Config;
 
 use super::io::send_command;
-use super::{BindKind, BindState, SessionError};
+use super::{BindKind, BindOutcome, BindState, SessionError};
 
 pub(super) async fn handle_bind(
     framed: &mut Framed<TcpStream, CommandCodec>,
@@ -23,25 +23,31 @@ pub(super) async fn handle_bind(
     password: &str,
     interface_version: InterfaceVersion,
     sequence: u32,
-) -> Result<(), SessionError> {
+) -> Result<BindOutcome, SessionError> {
     if *state != BindState::Unbound {
-        let response = bind_response(kind, config, CommandStatus::EsmeRalybnd, sequence, interface_version);
+        let response = bind_response(
+            kind,
+            config,
+            CommandStatus::EsmeRalybnd,
+            sequence,
+            interface_version,
+        );
         send_command(framed, peer, response).await?;
-        return Ok(());
+        return Ok(BindOutcome::AlreadyBound);
     }
 
     let auth_ok = config.authenticate(system_id, password);
 
-    let status = if auth_ok {
+    let (status, outcome) = if auth_ok {
         *state = match kind {
             BindKind::Transmitter => BindState::Transmitter,
             BindKind::Receiver => BindState::Receiver,
             BindKind::Transceiver => BindState::Transceiver,
         };
-        CommandStatus::EsmeRok
+        (CommandStatus::EsmeRok, BindOutcome::Accepted)
     } else {
         warn!(system_id, "bind authentication failed");
-        CommandStatus::EsmeRbindfail
+        (CommandStatus::EsmeRbindfail, BindOutcome::Rejected)
     };
 
     debug!(
@@ -53,7 +59,7 @@ pub(super) async fn handle_bind(
 
     let response = bind_response(kind, config, status, sequence, interface_version);
     send_command(framed, peer, response).await?;
-    Ok(())
+    Ok(outcome)
 }
 
 fn bind_response(

@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use rusmpp::pdus::SubmitSm;
 use rusmpp::types::COctetString;
 use tokio::sync::broadcast;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 #[derive(Debug)]
 pub enum QueueError {
@@ -33,12 +33,12 @@ pub struct QueueMessage {
 }
 
 #[derive(Debug)]
-pub struct StubQueue {
+pub struct InMemoryQueue {
     next_id: AtomicU64,
     tx: broadcast::Sender<QueueMessage>,
 }
 
-impl StubQueue {
+impl InMemoryQueue {
     pub fn new(capacity: usize) -> Self {
         let (tx, _rx) = broadcast::channel(capacity);
         Self {
@@ -48,13 +48,13 @@ impl StubQueue {
     }
 }
 
-impl Default for StubQueue {
+impl Default for InMemoryQueue {
     fn default() -> Self {
         Self::new(1024)
     }
 }
 
-impl MessageQueue for StubQueue {
+impl MessageQueue for InMemoryQueue {
     fn enqueue(&self, submit: &SubmitSm) -> Result<COctetString<1, 65>, QueueError> {
         let message_id_num = self.next_id.fetch_add(1, Ordering::Relaxed);
         let message_id_raw = format!("msg-{message_id_num}");
@@ -76,12 +76,12 @@ impl MessageQueue for StubQueue {
             }
         }
 
-        info!(
+        debug!(
             source = submit.source_addr.as_str(),
             destination = submit.destination_addr.as_str(),
             sm_length = submit.sm_length(),
             message_id = message_id.as_str(),
-            "submit_sm accepted (stub queue)"
+            "submit_sm accepted"
         );
 
         Ok(message_id)

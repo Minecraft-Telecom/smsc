@@ -7,17 +7,28 @@ const DEFAULT_CONFIG_PATH: &str = "smsc.toml";
 const DEFAULT_BIND_ADDR: &str = "0.0.0.0:2775";
 const DEFAULT_MAX_PDU_LENGTH: usize = 8192;
 const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 300;
+const DEFAULT_BIND_TIMEOUT_SECS: u64 = 30;
+const DEFAULT_DELIVER_RESPONSE_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_MAX_CONNECTIONS: usize = 1024;
+const DEFAULT_MAX_CONNECTIONS_PER_IP: usize = 32;
+const DEFAULT_MAX_BIND_FAILURES: usize = 3;
+const DEFAULT_MAX_PENDING_DELIVERIES: usize = 16;
 const DEFAULT_BROADCAST_CAPACITY: usize = 1024;
 const DEFAULT_SYSTEM_ID: &str = "smsc";
 const DEFAULT_LOG_FILTER: &str = "smsc=info,rusmpp=info";
+const MIN_MAX_PDU_LENGTH: usize = 256;
 
 #[derive(Debug, Clone)]
 pub struct Config {
     pub bind_addr: SocketAddr,
     pub max_pdu_length: usize,
     pub idle_timeout: Duration,
+    pub bind_timeout: Duration,
+    pub deliver_response_timeout: Duration,
     pub max_connections: usize,
+    pub max_connections_per_ip: usize,
+    pub max_bind_failures: usize,
+    pub max_pending_deliveries: usize,
     pub queue_broadcast_capacity: usize,
     pub server_system_id: COctetString<1, 16>,
     pub credentials: Vec<Credential>,
@@ -38,8 +49,14 @@ impl Credential {
 
 #[derive(Debug)]
 pub enum ConfigError {
-    ReadConfig { path: String, source: std::io::Error },
-    ParseConfig { path: String, source: toml::de::Error },
+    ReadConfig {
+        path: String,
+        source: std::io::Error,
+    },
+    ParseConfig {
+        path: String,
+        source: toml::de::Error,
+    },
     InvalidBindAddr(String),
     InvalidMaxPduLength(usize),
     InvalidMaxConnections(usize),
@@ -67,7 +84,10 @@ impl std::fmt::Display for ConfigError {
                 write!(f, "invalid bind address: {value}")
             }
             ConfigError::InvalidMaxPduLength(value) => {
-                write!(f, "max PDU length must be >= 16, got {value}")
+                write!(
+                    f,
+                    "max PDU length must be >= {MIN_MAX_PDU_LENGTH}, got {value}"
+                )
             }
             ConfigError::InvalidMaxConnections(value) => {
                 write!(f, "max connections must be >= 1, got {value}")
@@ -102,7 +122,12 @@ struct ConfigFile {
     bind_addr: Option<String>,
     max_pdu_length: Option<usize>,
     idle_timeout_secs: Option<u64>,
+    bind_timeout_secs: Option<u64>,
+    deliver_response_timeout_secs: Option<u64>,
     max_connections: Option<usize>,
+    max_connections_per_ip: Option<usize>,
+    max_bind_failures: Option<usize>,
+    max_pending_deliveries: Option<usize>,
     queue_broadcast_capacity: Option<usize>,
     server_system_id: Option<String>,
     credentials: Option<Vec<CredentialFile>>,
@@ -129,18 +154,24 @@ impl Config {
 
     fn from_path(path: &Path) -> Result<Self, ConfigError> {
         let path_string = path.to_string_lossy().to_string();
-        let raw = std::fs::read_to_string(path)
-            .map_err(|err| ConfigError::ReadConfig { path: path_string.clone(), source: err })?;
-        let file: ConfigFile = toml::from_str(&raw)
-            .map_err(|err| ConfigError::ParseConfig { path: path_string, source: err })?;
+        let raw = std::fs::read_to_string(path).map_err(|err| ConfigError::ReadConfig {
+            path: path_string.clone(),
+            source: err,
+        })?;
+        let file: ConfigFile = toml::from_str(&raw).map_err(|err| ConfigError::ParseConfig {
+            path: path_string,
+            source: err,
+        })?;
 
-        let bind_addr_raw = file.bind_addr.unwrap_or_else(|| DEFAULT_BIND_ADDR.to_string());
+        let bind_addr_raw = file
+            .bind_addr
+            .unwrap_or_else(|| DEFAULT_BIND_ADDR.to_string());
         let bind_addr = bind_addr_raw
             .parse()
             .map_err(|_| ConfigError::InvalidBindAddr(bind_addr_raw))?;
 
         let max_pdu_length = file.max_pdu_length.unwrap_or(DEFAULT_MAX_PDU_LENGTH);
-        if max_pdu_length < 16 {
+        if max_pdu_length < MIN_MAX_PDU_LENGTH {
             return Err(ConfigError::InvalidMaxPduLength(max_pdu_length));
         }
 
@@ -150,12 +181,47 @@ impl Config {
         }
         let idle_timeout = Duration::from_secs(idle_timeout_secs);
 
+        let bind_timeout_secs = file.bind_timeout_secs.unwrap_or(DEFAULT_BIND_TIMEOUT_SECS);
+        if bind_timeout_secs == 0 {
+            return Err(ConfigError::InvalidIdleTimeout(0));
+        }
+        let bind_timeout = Duration::from_secs(bind_timeout_secs);
+
+        let deliver_response_timeout_secs = file
+            .deliver_response_timeout_secs
+            .unwrap_or(DEFAULT_DELIVER_RESPONSE_TIMEOUT_SECS);
+        if deliver_response_timeout_secs == 0 {
+            return Err(ConfigError::InvalidIdleTimeout(0));
+        }
+        let deliver_response_timeout = Duration::from_secs(deliver_response_timeout_secs);
+
         let max_connections = file.max_connections.unwrap_or(DEFAULT_MAX_CONNECTIONS);
         if max_connections == 0 {
             return Err(ConfigError::InvalidMaxConnections(0));
         }
 
-        let queue_broadcast_capacity = file.queue_broadcast_capacity.unwrap_or(DEFAULT_BROADCAST_CAPACITY);
+        let max_connections_per_ip = file
+            .max_connections_per_ip
+            .unwrap_or(DEFAULT_MAX_CONNECTIONS_PER_IP);
+        if max_connections_per_ip == 0 {
+            return Err(ConfigError::InvalidMaxConnections(0));
+        }
+
+        let max_bind_failures = file.max_bind_failures.unwrap_or(DEFAULT_MAX_BIND_FAILURES);
+        if max_bind_failures == 0 {
+            return Err(ConfigError::InvalidMaxConnections(0));
+        }
+
+        let max_pending_deliveries = file
+            .max_pending_deliveries
+            .unwrap_or(DEFAULT_MAX_PENDING_DELIVERIES);
+        if max_pending_deliveries == 0 {
+            return Err(ConfigError::InvalidMaxConnections(0));
+        }
+
+        let queue_broadcast_capacity = file
+            .queue_broadcast_capacity
+            .unwrap_or(DEFAULT_BROADCAST_CAPACITY);
         if queue_broadcast_capacity == 0 {
             return Err(ConfigError::InvalidQueueBroadcastCapacity(0));
         }
@@ -187,7 +253,10 @@ impl Config {
                     value: entry.password.clone(),
                 }
             })?;
-            credentials.push(Credential { system_id, password });
+            credentials.push(Credential {
+                system_id,
+                password,
+            });
         }
 
         let log_filter = file
@@ -198,7 +267,12 @@ impl Config {
             bind_addr,
             max_pdu_length,
             idle_timeout,
+            bind_timeout,
+            deliver_response_timeout,
             max_connections,
+            max_connections_per_ip,
+            max_bind_failures,
+            max_pending_deliveries,
             queue_broadcast_capacity,
             server_system_id,
             credentials,

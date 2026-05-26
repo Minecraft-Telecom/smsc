@@ -21,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let server_task = tokio::spawn(server.run(shutdown_rx));
 
-    tokio::signal::ctrl_c().await?;
+    wait_for_shutdown_signal().await?;
     info!("shutdown requested");
     _ = shutdown_tx.send(true);
 
@@ -30,4 +30,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(Err(err)) => Err(err.into()),
         Err(err) => Err(err.into()),
     }
+}
+
+#[cfg(unix)]
+async fn wait_for_shutdown_signal() -> std::io::Result<()> {
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+
+    tokio::select! {
+        res = tokio::signal::ctrl_c() => res,
+        _ = sigterm.recv() => Ok(()),
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_for_shutdown_signal() -> std::io::Result<()> {
+    tokio::signal::ctrl_c().await
 }

@@ -1,14 +1,18 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::net::IpAddr;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use futures::StreamExt;
+use socket2::{SockRef, TcpKeepalive};
 use tokio::net::TcpListener;
-use tokio::sync::{watch, Semaphore};
+use tokio::sync::{Semaphore, watch};
 use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::config::Config;
-use crate::queue::{MessageQueue, StubQueue};
+use crate::queue::{InMemoryQueue, MessageQueue};
 use crate::session::run_session;
 
 #[derive(Debug)]
@@ -39,7 +43,8 @@ pub struct Server {
 
 impl Server {
     pub fn new(config: Config) -> Self {
-        let queue: Arc<dyn MessageQueue> = Arc::new(StubQueue::new(config.queue_broadcast_capacity));
+        let queue: Arc<dyn MessageQueue> =
+            Arc::new(InMemoryQueue::new(config.queue_broadcast_capacity));
 
         Self {
             config: Arc::new(config),
@@ -51,11 +56,13 @@ impl Server {
         let listener = TcpListener::bind(self.config.bind_addr).await?;
         let mut incoming = TcpListenerStream::new(listener);
         let limiter = Arc::new(Semaphore::new(self.config.max_connections));
+        let ip_limiter = IpConnectionLimiter::new(self.config.max_connections_per_ip);
         let cancellation_token = CancellationToken::new();
 
         info!(
             bind_addr = %self.config.bind_addr,
             max_connections = self.config.max_connections,
+            max_connections_per_ip = self.config.max_connections_per_ip,
             "SMSC listening"
         );
 
@@ -98,8 +105,19 @@ impl Server {
                         }
                     };
 
+                    let ip_guard = match ip_limiter.try_acquire(peer.ip()) {
+                        Some(guard) => guard,
+                        None => {
+                            warn!(peer = %peer, "per-IP connection limit reached");
+                            continue;
+                        }
+                    };
+
                     if let Err(err) = stream.set_nodelay(true) {
                         warn!(?err, "failed to set TCP_NODELAY");
+                    }
+                    if let Err(err) = set_keepalive(&stream) {
+                        warn!(?err, "failed to set TCP keepalive");
                     }
 
                     let config = Arc::clone(&self.config);
@@ -108,6 +126,7 @@ impl Server {
 
                     tokio::spawn(async move {
                         let _permit = permit;
+                        let _ip_guard = ip_guard;
 
                         if let Err(err) = run_session(stream, peer, config, queue, session_token).await {
                             warn!(?err, "session terminated with error");
@@ -119,5 +138,64 @@ impl Server {
 
         info!("server stopped");
         Ok(())
+    }
+}
+
+fn set_keepalive(stream: &tokio::net::TcpStream) -> std::io::Result<()> {
+    let keepalive = TcpKeepalive::new()
+        .with_time(Duration::from_secs(60))
+        .with_interval(Duration::from_secs(10));
+    SockRef::from(stream).set_tcp_keepalive(&keepalive)
+}
+
+#[derive(Debug, Clone)]
+struct IpConnectionLimiter {
+    max_per_ip: usize,
+    counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
+}
+
+impl IpConnectionLimiter {
+    fn new(max_per_ip: usize) -> Self {
+        Self {
+            max_per_ip,
+            counts: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn try_acquire(&self, ip: IpAddr) -> Option<IpConnectionGuard> {
+        let mut counts = self
+            .counts
+            .lock()
+            .expect("IP connection limiter mutex poisoned");
+        let count = counts.entry(ip).or_insert(0);
+        if *count >= self.max_per_ip {
+            return None;
+        }
+        *count += 1;
+        Some(IpConnectionGuard {
+            ip,
+            counts: Arc::clone(&self.counts),
+        })
+    }
+}
+
+#[derive(Debug)]
+struct IpConnectionGuard {
+    ip: IpAddr,
+    counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
+}
+
+impl Drop for IpConnectionGuard {
+    fn drop(&mut self) {
+        let mut counts = self
+            .counts
+            .lock()
+            .expect("IP connection limiter mutex poisoned");
+        if let Some(count) = counts.get_mut(&self.ip) {
+            *count -= 1;
+            if *count == 0 {
+                counts.remove(&self.ip);
+            }
+        }
     }
 }

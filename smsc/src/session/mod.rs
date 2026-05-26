@@ -1,4 +1,5 @@
 mod bind;
+mod deliver;
 mod delivery;
 mod handler;
 mod io;
@@ -66,6 +67,13 @@ enum BindKind {
 enum SessionAction {
     Continue,
     Close,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum BindOutcome {
+    Accepted,
+    Rejected,
+    AlreadyBound,
 }
 
 pub use run::run_session;

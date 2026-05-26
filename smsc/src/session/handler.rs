@@ -13,9 +13,10 @@ use crate::config::Config;
 use crate::queue::MessageQueue;
 
 use super::bind::handle_bind;
+use super::deliver::{DeliverySource, PendingDeliveries};
 use super::delivery::{build_delivery_receipt, wants_delivery_receipt};
 use super::io::{send_command, send_nack};
-use super::{next_sequence_number, BindKind, BindState, SessionAction, SessionError};
+use super::{BindKind, BindOutcome, BindState, SessionAction, SessionError, next_sequence_number};
 
 pub(super) async fn handle_command(
     framed: &mut Framed<TcpStream, CommandCodec>,
@@ -24,6 +25,8 @@ pub(super) async fn handle_command(
     config: &Config,
     queue: &Arc<dyn MessageQueue>,
     next_sequence: &mut u32,
+    bind_failures: &mut usize,
+    pending_deliveries: &mut PendingDeliveries,
     command: Command,
 ) -> Result<SessionAction, SessionError> {
     let sequence = command.sequence_number();
@@ -37,7 +40,7 @@ pub(super) async fn handle_command(
 
     match pdu {
         Pdu::BindTransmitter(bind) => {
-            handle_bind(
+            let outcome = handle_bind(
                 framed,
                 peer,
                 state,
@@ -49,9 +52,10 @@ pub(super) async fn handle_command(
                 sequence,
             )
             .await?;
+            return handle_bind_outcome(peer, config, bind_failures, outcome);
         }
         Pdu::BindReceiver(bind) => {
-            handle_bind(
+            let outcome = handle_bind(
                 framed,
                 peer,
                 state,
@@ -63,9 +67,10 @@ pub(super) async fn handle_command(
                 sequence,
             )
             .await?;
+            return handle_bind_outcome(peer, config, bind_failures, outcome);
         }
         Pdu::BindTransceiver(bind) => {
-            handle_bind(
+            let outcome = handle_bind(
                 framed,
                 peer,
                 state,
@@ -77,6 +82,7 @@ pub(super) async fn handle_command(
                 sequence,
             )
             .await?;
+            return handle_bind_outcome(peer, config, bind_failures, outcome);
         }
         Pdu::EnquireLink => {
             let response = Command::new(CommandStatus::EsmeRok, sequence, Pdu::EnquireLinkResp);
@@ -89,18 +95,15 @@ pub(super) async fn handle_command(
             }
 
             let wants_receipt = wants_delivery_receipt(&submit);
-            let message_id = match queue.enqueue(&submit) {
-                Ok(message_id) => message_id,
+            let (status, message_id) = match queue.enqueue(&submit) {
+                Ok(message_id) => (CommandStatus::EsmeRok, message_id),
                 Err(_) => {
-                    warn!("submit_sm rejected by queue stub");
-                    COctetString::<1, 65>::empty()
+                    warn!("submit_sm rejected by queue");
+                    (
+                        CommandStatus::EsmeRsubmitfail,
+                        COctetString::<1, 65>::empty(),
+                    )
                 }
-            };
-
-            let status = if message_id.is_empty() {
-                CommandStatus::EsmeRsubmitfail
-            } else {
-                CommandStatus::EsmeRok
             };
 
             let resp = SubmitSmResp::builder()
@@ -111,10 +114,27 @@ pub(super) async fn handle_command(
 
             if status == CommandStatus::EsmeRok && wants_receipt {
                 if state.allows_rx() {
-                    let deliver = build_delivery_receipt(&submit, &message_id)?;
-                    let sequence = next_sequence_number(next_sequence);
-                    let receipt = Command::new(CommandStatus::EsmeRok, sequence, deliver);
-                    send_command(framed, peer, receipt).await?;
+                    if pending_deliveries.len() >= config.max_pending_deliveries {
+                        warn!(
+                            peer = %peer,
+                            message_id = message_id.as_str(),
+                            "delivery receipt skipped; pending delivery window full"
+                        );
+                    } else {
+                        let deliver = build_delivery_receipt(&submit, &message_id)?;
+                        let sequence = next_sequence_number(next_sequence);
+                        let receipt = Command::new(CommandStatus::EsmeRok, sequence, deliver);
+                        pending_deliveries
+                            .send(
+                                framed,
+                                peer,
+                                receipt,
+                                DeliverySource::Receipt {
+                                    message_id: message_id.as_str().to_string(),
+                                },
+                            )
+                            .await?;
+                    }
                 } else {
                     debug!(peer = %peer, "delivery receipt skipped; session not bound for rx");
                 }
@@ -135,4 +155,32 @@ pub(super) async fn handle_command(
     }
 
     Ok(SessionAction::Continue)
+}
+
+fn handle_bind_outcome(
+    peer: SocketAddr,
+    config: &Config,
+    bind_failures: &mut usize,
+    outcome: BindOutcome,
+) -> Result<SessionAction, SessionError> {
+    match outcome {
+        BindOutcome::Accepted => {
+            *bind_failures = 0;
+            Ok(SessionAction::Continue)
+        }
+        BindOutcome::AlreadyBound => Ok(SessionAction::Continue),
+        BindOutcome::Rejected => {
+            *bind_failures += 1;
+            if *bind_failures >= config.max_bind_failures {
+                warn!(
+                    peer = %peer,
+                    failures = *bind_failures,
+                    "closing session after repeated bind authentication failures"
+                );
+                Ok(SessionAction::Close)
+            } else {
+                Ok(SessionAction::Continue)
+            }
+        }
+    }
 }

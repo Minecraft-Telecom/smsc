@@ -398,6 +398,7 @@ dependencies = [
  "futures",
  "rusmpp",
  "serde",
+ "socket2 0.6.3 (git+https://github.com/rust-lang/socket2.git?rev=c93d95a0140f092ca1a7102ff7834cade5f74051)",
  "tokio",
  "tokio-stream",
  "tokio-util",
@@ -411,6 +412,15 @@ name = "socket2"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
+dependencies = [
+ "libc",
+ "windows-sys",
+]
+
+[[package]]
+name = "socket2"
+version = "0.6.3"
+source = "git+https://github.com/rust-lang/socket2.git?rev=c93d95a0140f092ca1a7102ff7834cade5f74051#c93d95a0140f092ca1a7102ff7834cade5f74051"
 dependencies = [
  "libc",
  "windows-sys",
@@ -473,7 +483,7 @@ dependencies = [
  "mio",
  "pin-project-lite",
  "signal-hook-registry",
- "socket2",
+ "socket2 0.6.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-macros",
  "windows-sys",
 ]
