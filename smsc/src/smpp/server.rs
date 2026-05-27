@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::config::Config;
-use crate::queue::{InMemoryQueue, MessageQueue};
+use crate::queue::MessageQueue;
 use super::session::run_session;
 
 #[derive(Debug)]
@@ -42,10 +42,7 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(config: Config) -> Self {
-        let queue: Arc<dyn MessageQueue> =
-            Arc::new(InMemoryQueue::new(config.queue_broadcast_capacity));
-
+    pub fn new(config: Config, queue: Arc<dyn MessageQueue>) -> Self {
         Self {
             config: Arc::new(config),
             queue,
@@ -53,16 +50,16 @@ impl Server {
     }
 
     pub async fn run(self, mut shutdown: watch::Receiver<bool>) -> Result<(), ServerError> {
-        let listener = TcpListener::bind(self.config.bind_addr).await?;
+        let listener = TcpListener::bind(self.config.smpp.bind_addr).await?;
         let mut incoming = TcpListenerStream::new(listener);
-        let limiter = Arc::new(Semaphore::new(self.config.max_connections));
-        let ip_limiter = IpConnectionLimiter::new(self.config.max_connections_per_ip);
+        let limiter = Arc::new(Semaphore::new(self.config.smpp.max_connections));
+        let ip_limiter = IpConnectionLimiter::new(self.config.smpp.max_connections_per_ip);
         let cancellation_token = CancellationToken::new();
 
         info!(
-            bind_addr = %self.config.bind_addr,
-            max_connections = self.config.max_connections,
-            max_connections_per_ip = self.config.max_connections_per_ip,
+            bind_addr = %self.config.smpp.bind_addr,
+            max_connections = self.config.smpp.max_connections,
+            max_connections_per_ip = self.config.smpp.max_connections_per_ip,
             "SMSC listening"
         );
 

@@ -114,7 +114,7 @@ pub(super) async fn handle_command(
 
             if status == CommandStatus::EsmeRok && wants_receipt {
                 if state.allows_rx() {
-                    if pending_deliveries.len() >= config.max_pending_deliveries {
+                    if pending_deliveries.len() >= config.smpp.max_pending_deliveries {
                         warn!(
                             peer = %peer,
                             message_id = message_id.as_str(),
@@ -171,7 +171,7 @@ fn handle_bind_outcome(
         BindOutcome::AlreadyBound => Ok(SessionAction::Continue),
         BindOutcome::Rejected => {
             *bind_failures += 1;
-            if *bind_failures >= config.max_bind_failures {
+            if *bind_failures >= config.smpp.max_bind_failures {
                 warn!(
                     peer = %peer,
                     failures = *bind_failures,

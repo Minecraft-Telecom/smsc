@@ -78,9 +78,9 @@ impl PendingDeliveries {
         Ok(())
     }
 
-    pub(super) fn handle_response(&mut self, peer: SocketAddr, command: &Command) -> bool {
+    pub(super) fn handle_response(&mut self, peer: SocketAddr, command: &Command) -> Option<(DeliverySource, CommandStatus)> {
         if command.id() != CommandId::DeliverSmResp {
-            return false;
+            return None;
         }
 
         let sequence = command.sequence_number();
@@ -104,13 +104,13 @@ impl PendingDeliveries {
                         "deliver_sm rejected by peer"
                     );
                 }
+                Some((pending.source, command.status()))
             }
             None => {
                 warn!(peer = %peer, sequence, "unexpected deliver_sm_resp");
+                None
             }
         }
-
-        true
     }
 
     pub(super) fn expire(&mut self, peer: SocketAddr) {

@@ -28,18 +28,18 @@ pub async fn run_session(
     queue: Arc<dyn MessageQueue>,
     session_token: CancellationToken,
 ) -> Result<(), SessionError> {
-    let codec = CommandCodec::new().with_max_length(config.max_pdu_length);
+    let codec = CommandCodec::new().with_max_length(config.smpp.max_pdu_length);
     let mut framed = Framed::new(stream, codec);
     let mut state = BindState::Unbound;
     let mut deliveries = queue.subscribe();
     let mut deliveries_open = true;
     let mut next_sequence: u32 = 1;
     let mut bind_failures = 0;
-    let mut pending_deliveries = PendingDeliveries::new(config.deliver_response_timeout);
+    let mut pending_deliveries = PendingDeliveries::new(config.smpp.deliver_response_timeout);
     let mut lagged_deliveries_total: u64 = 0;
-    let idle_timer = sleep(config.idle_timeout);
-    let bind_timer = sleep(config.bind_timeout);
-    let mut delivery_timeout_timer = interval(config.deliver_response_timeout);
+    let idle_timer = sleep(config.smpp.idle_timeout);
+    let bind_timer = sleep(config.smpp.bind_timeout);
+    let mut delivery_timeout_timer = interval(config.smpp.deliver_response_timeout);
     tokio::pin!(idle_timer);
     tokio::pin!(bind_timer);
 
@@ -63,7 +63,7 @@ pub async fn run_session(
             _ = delivery_timeout_timer.tick() => {
                 pending_deliveries.expire(peer);
             }
-            maybe_delivery = deliveries.recv(), if deliveries_open && pending_deliveries.len() < config.max_pending_deliveries => {
+            maybe_delivery = deliveries.recv(), if deliveries_open && pending_deliveries.len() < config.smpp.max_pending_deliveries => {
                 match maybe_delivery {
                     Ok(message) => {
                         if state.allows_rx() {
@@ -115,11 +115,23 @@ pub async fn run_session(
 
                 info!(peer = %peer, command_id = ?command.id(), sequence = command.sequence_number(), "rx");
                 debug!(peer = %peer, command = ?command, "rx detail");
-                idle_timer.as_mut().reset(Instant::now() + config.idle_timeout);
+                idle_timer.as_mut().reset(Instant::now() + config.smpp.idle_timeout);
 
                 if command.id().is_response() {
-                    if !pending_deliveries.handle_response(peer, &command) {
-                        debug!(peer = %peer, command_id = ?command.id(), "ignoring response PDU");
+                    match pending_deliveries.handle_response(peer, &command) {
+                        Some((source, status)) => {
+                            if let super::deliver::DeliverySource::Queue { message_id } = source {
+                                let message_status = if status == rusmpp::CommandStatus::EsmeRok {
+                                    crate::queue::MessageStatus::Delivered
+                                } else {
+                                    crate::queue::MessageStatus::Failed
+                                };
+                                queue.update_status(&message_id, message_status);
+                            }
+                        }
+                        None => {
+                            debug!(peer = %peer, command_id = ?command.id(), "ignoring response PDU");
+                        }
                     }
                     continue;
                 }

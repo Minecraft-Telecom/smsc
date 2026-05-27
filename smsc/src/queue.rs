@@ -1,6 +1,7 @@
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use dashmap::DashMap;
 use rusmpp::pdus::SubmitSm;
 use rusmpp::types::COctetString;
 use tokio::sync::broadcast;
@@ -21,9 +22,28 @@ impl std::fmt::Display for QueueError {
 
 impl std::error::Error for QueueError {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageStatus {
+    Queued,
+    Delivered,
+    Failed,
+}
+
+impl std::fmt::Display for MessageStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MessageStatus::Queued => write!(f, "queued"),
+            MessageStatus::Delivered => write!(f, "delivered"),
+            MessageStatus::Failed => write!(f, "failed"),
+        }
+    }
+}
+
 pub trait MessageQueue: Send + Sync {
     fn enqueue(&self, submit: &SubmitSm) -> Result<COctetString<1, 65>, QueueError>;
     fn subscribe(&self) -> broadcast::Receiver<QueueMessage>;
+    fn status(&self, message_id: &str) -> Option<MessageStatus>;
+    fn update_status(&self, message_id: &str, status: MessageStatus);
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +56,7 @@ pub struct QueueMessage {
 pub struct InMemoryQueue {
     next_id: AtomicU64,
     tx: broadcast::Sender<QueueMessage>,
+    statuses: DashMap<String, MessageStatus>,
 }
 
 impl InMemoryQueue {
@@ -44,6 +65,7 @@ impl InMemoryQueue {
         Self {
             next_id: AtomicU64::new(1),
             tx,
+            statuses: DashMap::new(),
         }
     }
 }
@@ -84,10 +106,24 @@ impl MessageQueue for InMemoryQueue {
             "submit_sm accepted"
         );
 
+        self.statuses.insert(message_id_raw, MessageStatus::Queued);
+
         Ok(message_id)
     }
 
     fn subscribe(&self) -> broadcast::Receiver<QueueMessage> {
         self.tx.subscribe()
     }
+
+    fn status(&self, message_id: &str) -> Option<MessageStatus> {
+        self.statuses.get(message_id).map(|entry| *entry.value())
+    }
+
+    fn update_status(&self, message_id: &str, status: MessageStatus) {
+        if let Some(mut entry) = self.statuses.get_mut(message_id) {
+            *entry.value_mut() = status;
+            debug!(message_id, ?status, "message status updated");
+        }
+    }
 }
+

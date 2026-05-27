@@ -1,8 +1,11 @@
 mod config;
+mod http;
 mod queue;
 mod smpp;
 
+use std::sync::Arc;
 use config::Config;
+use queue::{InMemoryQueue, MessageQueue};
 use smpp::server::Server;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -16,19 +19,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    let server = Server::new(config);
+    let queue: Arc<dyn MessageQueue> =
+        Arc::new(InMemoryQueue::new(config.smpp.queue_broadcast_capacity));
+
+    let server = Server::new(config.clone(), queue.clone());
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let server_task = tokio::spawn(server.run(shutdown_rx));
+    
+    let smpp_task = tokio::spawn(server.run(shutdown_rx));
+    let http_task = tokio::spawn(http::run_http_server(config.http.bind_addr, queue));
 
     wait_for_shutdown_signal().await?;
     info!("shutdown requested");
     _ = shutdown_tx.send(true);
 
-    match server_task.await {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(err)) => Err(err.into()),
-        Err(err) => Err(err.into()),
-    }
+    let _ = tokio::join!(smpp_task, http_task);
+
+    Ok(())
 }
 
 #[cfg(unix)]

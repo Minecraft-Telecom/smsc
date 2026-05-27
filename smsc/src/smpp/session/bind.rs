@@ -69,7 +69,7 @@ fn bind_response(
     sequence: u32,
     interface_version: InterfaceVersion,
 ) -> Command {
-    let system_id = config.server_system_id.clone();
+    let system_id = config.smpp.server_system_id.clone();
     let resp_pdu = match kind {
         BindKind::Transmitter => {
             let resp = BindTransmitterResp::builder()

@@ -94,6 +94,14 @@ where
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    pub smpp: SmppConfig,
+    pub http: HttpConfig,
+    pub log_filter: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct SmppConfig {
     #[serde(deserialize_with = "de_socket_addr")]
     pub bind_addr: SocketAddr,
 
@@ -128,10 +136,16 @@ pub struct Config {
     pub server_system_id: COctetString<1, 16>,
 
     pub credentials: Vec<Credential>,
-    pub log_filter: String,
 }
 
-impl Default for Config {
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct HttpConfig {
+    #[serde(deserialize_with = "de_socket_addr")]
+    pub bind_addr: SocketAddr,
+}
+
+impl Default for SmppConfig {
     fn default() -> Self {
         Self {
             bind_addr: DEFAULT_BIND_ADDR.parse().expect("valid default bind addr"),
@@ -147,6 +161,23 @@ impl Default for Config {
             server_system_id: COctetString::from_str(DEFAULT_SYSTEM_ID)
                 .expect("valid default system id"),
             credentials: Vec::new(),
+        }
+    }
+}
+
+impl Default for HttpConfig {
+    fn default() -> Self {
+        Self {
+            bind_addr: "0.0.0.0:8080".parse().expect("valid config"),
+        }
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            smpp: SmppConfig::default(),
+            http: HttpConfig::default(),
             log_filter: DEFAULT_LOG_FILTER.to_string(),
         }
     }
@@ -174,7 +205,7 @@ impl Config {
     }
 
     pub fn authenticate(&self, system_id: &str, password: &str) -> bool {
-        self.credentials
+        self.smpp.credentials
             .iter()
             .any(|credential| credential.matches(system_id, password))
     }
@@ -186,7 +217,7 @@ impl Config {
     }
 
     fn validate(self) -> Result<Self, std::io::Error> {
-        if self.credentials.is_empty() {
+        if self.smpp.credentials.is_empty() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "credentials must contain at least one entry",
