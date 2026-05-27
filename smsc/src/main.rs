@@ -1,10 +1,9 @@
 mod config;
 mod queue;
-mod server;
-mod session;
+mod smpp;
 
 use config::Config;
-use server::Server;
+use smpp::server::Server;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 

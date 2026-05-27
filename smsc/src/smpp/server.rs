@@ -13,7 +13,7 @@ use tracing::{info, warn};
 
 use crate::config::Config;
 use crate::queue::{InMemoryQueue, MessageQueue};
-use crate::session::run_session;
+use super::session::run_session;
 
 #[derive(Debug)]
 pub enum ServerError {

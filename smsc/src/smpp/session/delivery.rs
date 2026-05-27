@@ -4,6 +4,7 @@ use rusmpp::types::{COctetString, EmptyOrFullCOctetString, OctetString};
 use rusmpp::values::{EsmClass, MCDeliveryReceipt, MessageState, MessageType};
 
 use crate::queue::QueueMessage;
+use crate::smpp::session::SessionError::{self, ReceiptOverflow};
 
 pub(super) fn wants_delivery_receipt(submit: &SubmitSm) -> bool {
     !matches!(
@@ -39,7 +40,7 @@ pub(super) fn build_deliver_sm(message: &QueueMessage) -> DeliverSm {
 pub(super) fn build_delivery_receipt(
     submit: &SubmitSm,
     message_id: &COctetString<1, 65>,
-) -> Result<DeliverSm, crate::session::SessionError> {
+) -> Result<DeliverSm, SessionError> {
     let esm_class = EsmClass {
         message_type: MessageType::ShortMessageContainsMCDeliveryReceipt,
         ..EsmClass::default()
@@ -47,7 +48,7 @@ pub(super) fn build_delivery_receipt(
 
     let receipt_text = format!("id:{} stat:DELIVRD", message_id.as_str());
     let short_message = OctetString::from_slice(receipt_text.as_bytes())
-        .map_err(|_| crate::session::SessionError::ReceiptOverflow)?;
+        .map_err(|_| ReceiptOverflow)?;
 
     Ok(DeliverSm::builder()
         .service_type(submit.service_type.clone())
