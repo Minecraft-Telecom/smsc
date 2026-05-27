@@ -9,7 +9,7 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config = Config::from_file()?;
 
     let filter = EnvFilter::try_from_default_env()

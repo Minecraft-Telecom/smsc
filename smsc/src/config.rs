@@ -1,4 +1,10 @@
-use std::{env, net::SocketAddr, path::Path, str::FromStr, time::Duration};
+use std::{
+    env,
+    net::SocketAddr,
+    path::Path,
+    str::FromStr,
+    time::Duration,
+};
 
 use rusmpp::types::COctetString;
 use serde::Deserialize;
@@ -18,26 +24,140 @@ const DEFAULT_SYSTEM_ID: &str = "smsc";
 const DEFAULT_LOG_FILTER: &str = "smsc=info,rusmpp=info";
 const MIN_MAX_PDU_LENGTH: usize = 256;
 
-#[derive(Debug, Clone)]
+fn de_socket_addr<'de, D>(deserializer: D) -> Result<SocketAddr, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    s.parse().map_err(serde::de::Error::custom)
+}
+
+fn de_duration_secs<'de, D>(deserializer: D) -> Result<Duration, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let secs = u64::deserialize(deserializer)?;
+    if secs == 0 {
+        return Err(serde::de::Error::custom("value must be >= 1"));
+    }
+    Ok(Duration::from_secs(secs))
+}
+
+fn de_nonzero_usize<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = usize::deserialize(deserializer)?;
+    if value == 0 {
+        return Err(serde::de::Error::custom("value must be >= 1"));
+    }
+    Ok(value)
+}
+
+fn de_min_pdu_length<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = usize::deserialize(deserializer)?;
+    if value < MIN_MAX_PDU_LENGTH {
+        return Err(serde::de::Error::custom(format!(
+            "value must be >= {MIN_MAX_PDU_LENGTH}"
+        )));
+    }
+    Ok(value)
+}
+
+fn de_server_system_id<'de, D>(deserializer: D) -> Result<COctetString<1, 16>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    COctetString::from_str(&s).map_err(serde::de::Error::custom)
+}
+
+fn de_credential_system_id<'de, D>(deserializer: D) -> Result<COctetString<1, 16>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    COctetString::from_str(&s).map_err(serde::de::Error::custom)
+}
+
+fn de_credential_password<'de, D>(deserializer: D) -> Result<COctetString<1, 9>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    COctetString::from_str(&s).map_err(serde::de::Error::custom)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct Config {
+    #[serde(deserialize_with = "de_socket_addr")]
     pub bind_addr: SocketAddr,
+
+    #[serde(deserialize_with = "de_min_pdu_length")]
     pub max_pdu_length: usize,
+
+    #[serde(deserialize_with = "de_duration_secs")]
     pub idle_timeout: Duration,
+
+    #[serde(deserialize_with = "de_duration_secs")]
     pub bind_timeout: Duration,
+
+    #[serde(deserialize_with = "de_duration_secs")]
     pub deliver_response_timeout: Duration,
+
+    #[serde(deserialize_with = "de_nonzero_usize")]
     pub max_connections: usize,
+
+    #[serde(deserialize_with = "de_nonzero_usize")]
     pub max_connections_per_ip: usize,
+
+    #[serde(deserialize_with = "de_nonzero_usize")]
     pub max_bind_failures: usize,
+
+    #[serde(deserialize_with = "de_nonzero_usize")]
     pub max_pending_deliveries: usize,
+
+    #[serde(deserialize_with = "de_nonzero_usize")]
     pub queue_broadcast_capacity: usize,
+
+    #[serde(deserialize_with = "de_server_system_id")]
     pub server_system_id: COctetString<1, 16>,
+
     pub credentials: Vec<Credential>,
     pub log_filter: String,
 }
 
-#[derive(Debug, Clone)]
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            bind_addr: DEFAULT_BIND_ADDR.parse().expect("valid default bind addr"),
+            max_pdu_length: DEFAULT_MAX_PDU_LENGTH,
+            idle_timeout: Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS),
+            bind_timeout: Duration::from_secs(DEFAULT_BIND_TIMEOUT_SECS),
+            deliver_response_timeout: Duration::from_secs(DEFAULT_DELIVER_RESPONSE_TIMEOUT_SECS),
+            max_connections: DEFAULT_MAX_CONNECTIONS,
+            max_connections_per_ip: DEFAULT_MAX_CONNECTIONS_PER_IP,
+            max_bind_failures: DEFAULT_MAX_BIND_FAILURES,
+            max_pending_deliveries: DEFAULT_MAX_PENDING_DELIVERIES,
+            queue_broadcast_capacity: DEFAULT_BROADCAST_CAPACITY,
+            server_system_id: COctetString::from_str(DEFAULT_SYSTEM_ID)
+                .expect("valid default system id"),
+            credentials: Vec::new(),
+            log_filter: DEFAULT_LOG_FILTER.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct Credential {
+    #[serde(deserialize_with = "de_credential_system_id")]
     pub system_id: COctetString<1, 16>,
+
+    #[serde(deserialize_with = "de_credential_password")]
     pub password: COctetString<1, 9>,
 }
 
@@ -47,101 +167,8 @@ impl Credential {
     }
 }
 
-#[derive(Debug)]
-pub enum ConfigError {
-    ReadConfig {
-        path: String,
-        source: std::io::Error,
-    },
-    ParseConfig {
-        path: String,
-        source: toml::de::Error,
-    },
-    InvalidBindAddr(String),
-    InvalidMaxPduLength(usize),
-    InvalidMaxConnections(usize),
-    InvalidQueueBroadcastCapacity(usize),
-    InvalidIdleTimeout(u64),
-    InvalidServerSystemId(String),
-    MissingCredentials,
-    InvalidCredential {
-        index: usize,
-        field: &'static str,
-        value: String,
-    },
-}
-
-impl std::fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ConfigError::ReadConfig { path, source } => {
-                write!(f, "failed to read config file {path}: {source}")
-            }
-            ConfigError::ParseConfig { path, source } => {
-                write!(f, "failed to parse config file {path}: {source}")
-            }
-            ConfigError::InvalidBindAddr(value) => {
-                write!(f, "invalid bind address: {value}")
-            }
-            ConfigError::InvalidMaxPduLength(value) => {
-                write!(
-                    f,
-                    "max PDU length must be >= {MIN_MAX_PDU_LENGTH}, got {value}"
-                )
-            }
-            ConfigError::InvalidMaxConnections(value) => {
-                write!(f, "max connections must be >= 1, got {value}")
-            }
-            ConfigError::InvalidQueueBroadcastCapacity(value) => {
-                write!(f, "queue broadcast capacity must be >= 1, got {value}")
-            }
-            ConfigError::InvalidIdleTimeout(value) => {
-                write!(f, "idle timeout seconds must be >= 1, got {value}")
-            }
-            ConfigError::InvalidServerSystemId(value) => {
-                write!(f, "invalid server_system_id: {value}")
-            }
-            ConfigError::MissingCredentials => {
-                write!(f, "credentials must contain at least one entry")
-            }
-            ConfigError::InvalidCredential {
-                index,
-                field,
-                value,
-            } => {
-                write!(f, "invalid credentials[{index}].{field}: {value}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for ConfigError {}
-
-#[derive(Debug, Deserialize)]
-struct ConfigFile {
-    bind_addr: Option<String>,
-    max_pdu_length: Option<usize>,
-    idle_timeout_secs: Option<u64>,
-    bind_timeout_secs: Option<u64>,
-    deliver_response_timeout_secs: Option<u64>,
-    max_connections: Option<usize>,
-    max_connections_per_ip: Option<usize>,
-    max_bind_failures: Option<usize>,
-    max_pending_deliveries: Option<usize>,
-    queue_broadcast_capacity: Option<usize>,
-    server_system_id: Option<String>,
-    credentials: Option<Vec<CredentialFile>>,
-    log_filter: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CredentialFile {
-    system_id: String,
-    password: String,
-}
-
 impl Config {
-    pub fn from_file() -> Result<Self, ConfigError> {
+    pub fn from_file() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let path = env::var("SMSC_CONFIG").unwrap_or_else(|_| DEFAULT_CONFIG_PATH.to_string());
         Self::from_path(Path::new(&path))
     }
@@ -152,131 +179,20 @@ impl Config {
             .any(|credential| credential.matches(system_id, password))
     }
 
-    fn from_path(path: &Path) -> Result<Self, ConfigError> {
-        let path_string = path.to_string_lossy().to_string();
-        let raw = std::fs::read_to_string(path).map_err(|err| ConfigError::ReadConfig {
-            path: path_string.clone(),
-            source: err,
-        })?;
-        let file: ConfigFile = toml::from_str(&raw).map_err(|err| ConfigError::ParseConfig {
-            path: path_string,
-            source: err,
-        })?;
+    fn from_path(path: &Path) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let raw = std::fs::read_to_string(path)?;
+        let cfg: Config = toml::from_str(&raw)?;
+        Ok(cfg.validate()?)
+    }
 
-        let bind_addr_raw = file
-            .bind_addr
-            .unwrap_or_else(|| DEFAULT_BIND_ADDR.to_string());
-        let bind_addr = bind_addr_raw
-            .parse()
-            .map_err(|_| ConfigError::InvalidBindAddr(bind_addr_raw))?;
-
-        let max_pdu_length = file.max_pdu_length.unwrap_or(DEFAULT_MAX_PDU_LENGTH);
-        if max_pdu_length < MIN_MAX_PDU_LENGTH {
-            return Err(ConfigError::InvalidMaxPduLength(max_pdu_length));
+    fn validate(self) -> Result<Self, std::io::Error> {
+        if self.credentials.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "credentials must contain at least one entry",
+            ));
         }
 
-        let idle_timeout_secs = file.idle_timeout_secs.unwrap_or(DEFAULT_IDLE_TIMEOUT_SECS);
-        if idle_timeout_secs == 0 {
-            return Err(ConfigError::InvalidIdleTimeout(0));
-        }
-        let idle_timeout = Duration::from_secs(idle_timeout_secs);
-
-        let bind_timeout_secs = file.bind_timeout_secs.unwrap_or(DEFAULT_BIND_TIMEOUT_SECS);
-        if bind_timeout_secs == 0 {
-            return Err(ConfigError::InvalidIdleTimeout(0));
-        }
-        let bind_timeout = Duration::from_secs(bind_timeout_secs);
-
-        let deliver_response_timeout_secs = file
-            .deliver_response_timeout_secs
-            .unwrap_or(DEFAULT_DELIVER_RESPONSE_TIMEOUT_SECS);
-        if deliver_response_timeout_secs == 0 {
-            return Err(ConfigError::InvalidIdleTimeout(0));
-        }
-        let deliver_response_timeout = Duration::from_secs(deliver_response_timeout_secs);
-
-        let max_connections = file.max_connections.unwrap_or(DEFAULT_MAX_CONNECTIONS);
-        if max_connections == 0 {
-            return Err(ConfigError::InvalidMaxConnections(0));
-        }
-
-        let max_connections_per_ip = file
-            .max_connections_per_ip
-            .unwrap_or(DEFAULT_MAX_CONNECTIONS_PER_IP);
-        if max_connections_per_ip == 0 {
-            return Err(ConfigError::InvalidMaxConnections(0));
-        }
-
-        let max_bind_failures = file.max_bind_failures.unwrap_or(DEFAULT_MAX_BIND_FAILURES);
-        if max_bind_failures == 0 {
-            return Err(ConfigError::InvalidMaxConnections(0));
-        }
-
-        let max_pending_deliveries = file
-            .max_pending_deliveries
-            .unwrap_or(DEFAULT_MAX_PENDING_DELIVERIES);
-        if max_pending_deliveries == 0 {
-            return Err(ConfigError::InvalidMaxConnections(0));
-        }
-
-        let queue_broadcast_capacity = file
-            .queue_broadcast_capacity
-            .unwrap_or(DEFAULT_BROADCAST_CAPACITY);
-        if queue_broadcast_capacity == 0 {
-            return Err(ConfigError::InvalidQueueBroadcastCapacity(0));
-        }
-
-        let server_system_id_raw = file
-            .server_system_id
-            .unwrap_or_else(|| DEFAULT_SYSTEM_ID.to_string());
-        let server_system_id = COctetString::from_str(&server_system_id_raw)
-            .map_err(|_| ConfigError::InvalidServerSystemId(server_system_id_raw))?;
-
-        let credentials_raw = file.credentials.unwrap_or_default();
-        if credentials_raw.is_empty() {
-            return Err(ConfigError::MissingCredentials);
-        }
-
-        let mut credentials = Vec::with_capacity(credentials_raw.len());
-        for (index, entry) in credentials_raw.into_iter().enumerate() {
-            let system_id = COctetString::from_str(&entry.system_id).map_err(|_| {
-                ConfigError::InvalidCredential {
-                    index,
-                    field: "system_id",
-                    value: entry.system_id.clone(),
-                }
-            })?;
-            let password = COctetString::from_str(&entry.password).map_err(|_| {
-                ConfigError::InvalidCredential {
-                    index,
-                    field: "password",
-                    value: entry.password.clone(),
-                }
-            })?;
-            credentials.push(Credential {
-                system_id,
-                password,
-            });
-        }
-
-        let log_filter = file
-            .log_filter
-            .unwrap_or_else(|| DEFAULT_LOG_FILTER.to_string());
-
-        Ok(Self {
-            bind_addr,
-            max_pdu_length,
-            idle_timeout,
-            bind_timeout,
-            deliver_response_timeout,
-            max_connections,
-            max_connections_per_ip,
-            max_bind_failures,
-            max_pending_deliveries,
-            queue_broadcast_capacity,
-            server_system_id,
-            credentials,
-            log_filter,
-        })
+        Ok(self)
     }
 }
