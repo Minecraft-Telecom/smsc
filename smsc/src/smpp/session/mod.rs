@@ -39,7 +39,7 @@ impl From<EncodeError> for SessionError {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum BindState {
+pub(crate) enum BindState {
     Unbound,
     Transmitter,
     Receiver,
@@ -74,6 +74,13 @@ enum BindOutcome {
     Accepted,
     Rejected,
     AlreadyBound,
+}
+
+pub(crate) struct SessionData {
+    pub state: BindState,
+    pub next_sequence: u32,
+    pub bind_failures: usize,
+    pub pending_deliveries: deliver::PendingDeliveries,
 }
 
 pub use run::run_session;

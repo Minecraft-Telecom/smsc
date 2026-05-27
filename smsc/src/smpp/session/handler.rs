@@ -13,20 +13,17 @@ use crate::config::Config;
 use crate::queue::MessageQueue;
 
 use super::bind::handle_bind;
-use super::deliver::{DeliverySource, PendingDeliveries};
+use super::deliver::DeliverySource;
 use super::delivery::{build_delivery_receipt, wants_delivery_receipt};
 use super::io::{send_command, send_nack};
-use super::{BindKind, BindOutcome, BindState, SessionAction, SessionError, next_sequence_number};
+use super::{BindKind, BindOutcome, SessionAction, SessionData, SessionError, next_sequence_number};
 
 pub(super) async fn handle_command(
     framed: &mut Framed<TcpStream, CommandCodec>,
     peer: SocketAddr,
-    state: &mut BindState,
+    session_data: &mut SessionData,
     config: &Config,
     queue: &Arc<dyn MessageQueue>,
-    next_sequence: &mut u32,
-    bind_failures: &mut usize,
-    pending_deliveries: &mut PendingDeliveries,
     command: Command,
 ) -> Result<SessionAction, SessionError> {
     let sequence = command.sequence_number();
@@ -40,62 +37,68 @@ pub(super) async fn handle_command(
 
     match pdu {
         Pdu::BindTransmitter(bind) => {
+            let params = super::bind::BindParams {
+                kind: BindKind::Transmitter,
+                system_id: bind.system_id.as_str(),
+                password: bind.password.as_str(),
+                interface_version: bind.interface_version,
+            };
             let outcome = handle_bind(
                 framed,
                 peer,
-                state,
-                config,
-                BindKind::Transmitter,
-                bind.system_id.as_str(),
-                bind.password.as_str(),
-                bind.interface_version,
+                &mut session_data.state, config,
+                params,
                 sequence,
             )
             .await?;
-            return handle_bind_outcome(peer, config, bind_failures, outcome);
+            return handle_bind_outcome(peer, config, &mut session_data.bind_failures, outcome);
         }
         Pdu::BindReceiver(bind) => {
+            let params = super::bind::BindParams {
+                kind: BindKind::Receiver,
+                system_id: bind.system_id.as_str(),
+                password: bind.password.as_str(),
+                interface_version: bind.interface_version,
+            };
             let outcome = handle_bind(
                 framed,
                 peer,
-                state,
-                config,
-                BindKind::Receiver,
-                bind.system_id.as_str(),
-                bind.password.as_str(),
-                bind.interface_version,
+                &mut session_data.state, config,
+                params,
                 sequence,
             )
             .await?;
-            return handle_bind_outcome(peer, config, bind_failures, outcome);
+            return handle_bind_outcome(peer, config, &mut session_data.bind_failures, outcome);
         }
         Pdu::BindTransceiver(bind) => {
+            let params = super::bind::BindParams {
+                kind: BindKind::Transceiver,
+                system_id: bind.system_id.as_str(),
+                password: bind.password.as_str(),
+                interface_version: bind.interface_version,
+            };
             let outcome = handle_bind(
                 framed,
                 peer,
-                state,
-                config,
-                BindKind::Transceiver,
-                bind.system_id.as_str(),
-                bind.password.as_str(),
-                bind.interface_version,
+                &mut session_data.state, config,
+                params,
                 sequence,
             )
             .await?;
-            return handle_bind_outcome(peer, config, bind_failures, outcome);
+            return handle_bind_outcome(peer, config, &mut session_data.bind_failures, outcome);
         }
         Pdu::EnquireLink => {
             let response = Command::new(CommandStatus::EsmeRok, sequence, Pdu::EnquireLinkResp);
             send_command(framed, peer, response).await?;
         }
         Pdu::SubmitSm(submit) => {
-            if !state.allows_tx() {
+            if !session_data.state.allows_tx() {
                 send_nack(framed, peer, sequence, CommandStatus::EsmeRinvbndsts).await?;
                 return Ok(SessionAction::Continue);
             }
 
-            let wants_receipt = wants_delivery_receipt(&submit);
-            let message_opt = match queue.enqueue(&submit) {
+            let wants_receipt = wants_delivery_receipt(submit);
+            let message_opt = match queue.enqueue(submit) {
                 Ok(msg) => Some(msg),
                 Err(_) => {
                     warn!("submit_sm rejected by queue");
@@ -119,8 +122,8 @@ pub(super) async fn handle_command(
 
             if status == CommandStatus::EsmeRok && wants_receipt {
                 let msg = message_opt.unwrap();
-                if state.allows_rx() {
-                    if pending_deliveries.len() >= config.smpp.max_pending_deliveries {
+                if session_data.state.allows_rx() {
+                    if session_data.pending_deliveries.len() >= config.smpp.max_pending_deliveries {
                         warn!(
                             peer = %peer,
                             message_id = msg.message_id_str(),
@@ -128,9 +131,9 @@ pub(super) async fn handle_command(
                         );
                     } else {
                         let deliver = build_delivery_receipt(&msg)?;
-                        let sequence = next_sequence_number(next_sequence);
+                        let sequence = next_sequence_number(&mut session_data.next_sequence);
                         let receipt = Command::new(CommandStatus::EsmeRok, sequence, deliver);
-                        pending_deliveries
+                        session_data.pending_deliveries
                             .send(
                                 framed,
                                 peer,
@@ -190,3 +193,6 @@ fn handle_bind_outcome(
         }
     }
 }
+
+
+

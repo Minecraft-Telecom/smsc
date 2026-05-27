@@ -29,10 +29,10 @@ pub async fn run_session(
 ) -> Result<(), SessionError> {
     let codec = CommandCodec::new().with_max_length(config.smpp.max_pdu_length);
     let mut framed = Framed::new(stream, codec);
-    let mut state = BindState::Unbound;
-    let mut next_sequence: u32 = 1;
-    let mut bind_failures = 0;
-    let mut pending_deliveries = PendingDeliveries::new(config.smpp.deliver_response_timeout);
+    let mut session_data = super::SessionData { state: BindState::Unbound, next_sequence: 1, bind_failures: 0, pending_deliveries: PendingDeliveries::new(config.smpp.deliver_response_timeout) };
+    
+    
+    
     let idle_timer = sleep(config.smpp.idle_timeout);
     let bind_timer = sleep(config.smpp.bind_timeout);
     let mut delivery_timeout_timer = interval(config.smpp.deliver_response_timeout);
@@ -45,27 +45,26 @@ pub async fn run_session(
         tokio::select! {
             _ = session_token.cancelled() => {
                 info!(peer = %peer, "server shutdown, sending unbind");
-                graceful_unbind(&mut framed, peer, &mut next_sequence).await?;
+                graceful_unbind(&mut framed, peer, &mut session_data.next_sequence).await?;
                 return Ok(());
             }
             _ = &mut idle_timer => {
                 info!(peer = %peer, "idle timeout, closing session");
                 return Ok(());
             }
-            _ = &mut bind_timer, if state == BindState::Unbound => {
+            _ = &mut bind_timer, if session_data.state == BindState::Unbound => {
                 info!(peer = %peer, "pre-bind timeout, closing session");
                 return Ok(());
             }
             _ = delivery_timeout_timer.tick() => {
-                pending_deliveries.expire(peer);
+                session_data.pending_deliveries.expire(peer);
             }
-            message = queue.dequeue(), if pending_deliveries.len() < config.smpp.max_pending_deliveries => {
-                if state.allows_rx() {
+            message = queue.dequeue(), if session_data.pending_deliveries.len() < config.smpp.max_pending_deliveries => {
+                if session_data.state.allows_rx() {
                     let deliver = build_deliver_sm(&message);
-                    let sequence = next_sequence_number(&mut next_sequence);
+                    let sequence = next_sequence_number(&mut session_data.next_sequence);
                     let response = Command::new(CommandStatus::EsmeRok, sequence, deliver);
-                    pending_deliveries
-                        .send(
+                    session_data.pending_deliveries.send(
                             &mut framed,
                             peer,
                             response,
@@ -100,7 +99,7 @@ pub async fn run_session(
                 idle_timer.as_mut().reset(Instant::now() + config.smpp.idle_timeout);
 
                 if command.id().is_response() {
-                    match pending_deliveries.handle_response(peer, &command) {
+                    match session_data.pending_deliveries.handle_response(peer, &command) {
                         Some((source, status)) => {
                             if let super::deliver::DeliverySource::Queue { message_id } = source {
                                 let message_status = if status == rusmpp::CommandStatus::EsmeRok {
@@ -121,12 +120,9 @@ pub async fn run_session(
                 let action = handle_command(
                     &mut framed,
                     peer,
-                    &mut state,
+                    &mut session_data,
                     &config,
                     &queue,
-                    &mut next_sequence,
-                    &mut bind_failures,
-                    &mut pending_deliveries,
                     command,
                 )
                 .await?;
@@ -172,3 +168,4 @@ async fn graceful_unbind(
 
     Ok(())
 }
+

@@ -13,7 +13,7 @@ use super::SessionError;
 use super::io::send_command;
 
 #[derive(Debug)]
-pub(super) struct PendingDeliveries {
+pub(crate) struct PendingDeliveries {
     timeout: Duration,
     entries: HashMap<u32, PendingDelivery>,
 }

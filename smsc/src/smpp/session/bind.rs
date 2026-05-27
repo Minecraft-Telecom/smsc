@@ -13,51 +13,55 @@ use crate::config::Config;
 use super::io::send_command;
 use super::{BindKind, BindOutcome, BindState, SessionError};
 
+pub(super) struct BindParams<'a> {
+    pub kind: BindKind,
+    pub system_id: &'a str,
+    pub password: &'a str,
+    pub interface_version: InterfaceVersion,
+}
+
 pub(super) async fn handle_bind(
     framed: &mut Framed<TcpStream, CommandCodec>,
     peer: SocketAddr,
     state: &mut BindState,
     config: &Config,
-    kind: BindKind,
-    system_id: &str,
-    password: &str,
-    interface_version: InterfaceVersion,
+    params: BindParams<'_>,
     sequence: u32,
 ) -> Result<BindOutcome, SessionError> {
     if *state != BindState::Unbound {
         let response = bind_response(
-            kind,
+            params.kind,
             config,
             CommandStatus::EsmeRalybnd,
             sequence,
-            interface_version,
+            params.interface_version,
         );
         send_command(framed, peer, response).await?;
         return Ok(BindOutcome::AlreadyBound);
     }
 
-    let auth_ok = config.authenticate(system_id, password);
+    let auth_ok = config.authenticate(params.system_id, params.password);
 
     let (status, outcome) = if auth_ok {
-        *state = match kind {
+        *state = match params.kind {
             BindKind::Transmitter => BindState::Transmitter,
             BindKind::Receiver => BindState::Receiver,
             BindKind::Transceiver => BindState::Transceiver,
         };
         (CommandStatus::EsmeRok, BindOutcome::Accepted)
     } else {
-        warn!(system_id, "bind authentication failed");
+        warn!(params.system_id, "bind authentication failed");
         (CommandStatus::EsmeRbindfail, BindOutcome::Rejected)
     };
 
     debug!(
-        system_id,
-        ?interface_version,
+        params.system_id,
+        ?params.interface_version,
         ?status,
         "bind request processed"
     );
 
-    let response = bind_response(kind, config, status, sequence, interface_version);
+    let response = bind_response(params.kind, config, status, sequence, params.interface_version);
     send_command(framed, peer, response).await?;
     Ok(outcome)
 }
@@ -96,3 +100,4 @@ fn bind_response(
 
     Command::new(status, sequence, resp_pdu)
 }
+
