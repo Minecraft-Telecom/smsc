@@ -1,6 +1,6 @@
 use rusmpp::pdus::{DeliverSm, SubmitSm};
 use rusmpp::tlvs::MessageDeliveryRequestTlvValue;
-use rusmpp::types::{COctetString, EmptyOrFullCOctetString, OctetString};
+use rusmpp::types::{EmptyOrFullCOctetString, OctetString};
 use rusmpp::values::{EsmClass, MCDeliveryReceipt, MessageState, MessageType};
 
 use crate::queue::QueueMessage;
@@ -38,15 +38,15 @@ pub(super) fn build_deliver_sm(message: &QueueMessage) -> DeliverSm {
 }
 
 pub(super) fn build_delivery_receipt(
-    submit: &SubmitSm,
-    message_id: &COctetString<1, 65>,
+    message: &QueueMessage,
 ) -> Result<DeliverSm, SessionError> {
+    let submit = &message.submit;
     let esm_class = EsmClass {
         message_type: MessageType::ShortMessageContainsMCDeliveryReceipt,
         ..EsmClass::default()
     };
 
-    let receipt_text = format!("id:{} stat:DELIVRD", message_id.as_str());
+    let receipt_text = format!("id:{} stat:DELIVRD", message.message_id_str());
     let short_message = OctetString::from_slice(receipt_text.as_bytes())
         .map_err(|_| ReceiptOverflow)?;
 
@@ -69,10 +69,11 @@ pub(super) fn build_delivery_receipt(
         .sm_default_msg_id(0)
         .short_message(short_message)
         .push_tlv(MessageDeliveryRequestTlvValue::ReceiptedMessageId(
-            message_id.clone(),
+            message.message_id(),
         ))
         .push_tlv(MessageDeliveryRequestTlvValue::MessageState(
             MessageState::Delivered,
         ))
         .build())
 }
+

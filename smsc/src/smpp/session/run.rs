@@ -6,7 +6,6 @@ use futures::StreamExt;
 use rusmpp::tokio_codec::CommandCodec;
 use rusmpp::{Command, CommandId, CommandStatus, Pdu};
 use tokio::net::TcpStream;
-use tokio::sync::broadcast::error::RecvError;
 use tokio::time::{Instant, interval, sleep, timeout};
 use tokio_util::codec::Framed;
 use tokio_util::sync::CancellationToken;
@@ -31,12 +30,9 @@ pub async fn run_session(
     let codec = CommandCodec::new().with_max_length(config.smpp.max_pdu_length);
     let mut framed = Framed::new(stream, codec);
     let mut state = BindState::Unbound;
-    let mut deliveries = queue.subscribe();
-    let mut deliveries_open = true;
     let mut next_sequence: u32 = 1;
     let mut bind_failures = 0;
     let mut pending_deliveries = PendingDeliveries::new(config.smpp.deliver_response_timeout);
-    let mut lagged_deliveries_total: u64 = 0;
     let idle_timer = sleep(config.smpp.idle_timeout);
     let bind_timer = sleep(config.smpp.bind_timeout);
     let mut delivery_timeout_timer = interval(config.smpp.deliver_response_timeout);
@@ -63,44 +59,30 @@ pub async fn run_session(
             _ = delivery_timeout_timer.tick() => {
                 pending_deliveries.expire(peer);
             }
-            maybe_delivery = deliveries.recv(), if deliveries_open && pending_deliveries.len() < config.smpp.max_pending_deliveries => {
-                match maybe_delivery {
-                    Ok(message) => {
-                        if state.allows_rx() {
-                            let deliver = build_deliver_sm(&message);
-                            let sequence = next_sequence_number(&mut next_sequence);
-                            let response = Command::new(CommandStatus::EsmeRok, sequence, deliver);
-                            pending_deliveries
-                                .send(
-                                    &mut framed,
-                                    peer,
-                                    response,
-                                    DeliverySource::Queue {
-                                        message_id: message.message_id.as_str().to_string(),
-                                    },
-                                )
-                                .await?;
-                        } else {
-                            debug!(
-                                peer = %peer,
-                                message_id = message.message_id.as_str(),
-                                "queue delivery skipped; session not bound for rx"
-                            );
-                        }
-                    }
-                    Err(RecvError::Lagged(count)) => {
-                        lagged_deliveries_total = lagged_deliveries_total.saturating_add(count);
-                        warn!(
-                            peer = %peer,
-                            lagged = count,
-                            lagged_total = lagged_deliveries_total,
-                            "queue delivery lagged"
-                        );
-                    }
-                    Err(RecvError::Closed) => {
-                        deliveries_open = false;
-                        debug!(peer = %peer, "queue delivery channel closed");
-                    }
+            message = queue.dequeue(), if pending_deliveries.len() < config.smpp.max_pending_deliveries => {
+                if state.allows_rx() {
+                    let deliver = build_deliver_sm(&message);
+                    let sequence = next_sequence_number(&mut next_sequence);
+                    let response = Command::new(CommandStatus::EsmeRok, sequence, deliver);
+                    pending_deliveries
+                        .send(
+                            &mut framed,
+                            peer,
+                            response,
+                            DeliverySource::Queue {
+                                message_id: message.message_id_str().to_string(),
+                            },
+                        )
+                        .await?;
+                } else {
+                    debug!(
+                        peer = %peer,
+                        message_id = message.message_id_str(),
+                        "queue delivery skipped; session not bound for rx"
+                    );
+                    // Currently we drop the message since we popped it but cannot rx.
+                    // A production ready queue would maybe requeue or nack.
+                    queue.update_status(message.message_id_str(), crate::queue::MessageStatus::Failed);
                 }
             }
             maybe_command = framed.next() => {

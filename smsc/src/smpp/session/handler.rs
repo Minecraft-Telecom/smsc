@@ -95,15 +95,20 @@ pub(super) async fn handle_command(
             }
 
             let wants_receipt = wants_delivery_receipt(&submit);
-            let (status, message_id) = match queue.enqueue(&submit) {
-                Ok(message_id) => (CommandStatus::EsmeRok, message_id),
+            let message_opt = match queue.enqueue(&submit) {
+                Ok(msg) => Some(msg),
                 Err(_) => {
                     warn!("submit_sm rejected by queue");
-                    (
-                        CommandStatus::EsmeRsubmitfail,
-                        COctetString::<1, 65>::empty(),
-                    )
+                    None
                 }
+            };
+
+            let (status, message_id) = match &message_opt {
+                Some(msg) => (CommandStatus::EsmeRok, msg.message_id()),
+                None => (
+                    CommandStatus::EsmeRsubmitfail,
+                    COctetString::<1, 65>::empty(),
+                ),
             };
 
             let resp = SubmitSmResp::builder()
@@ -113,15 +118,16 @@ pub(super) async fn handle_command(
             send_command(framed, peer, response).await?;
 
             if status == CommandStatus::EsmeRok && wants_receipt {
+                let msg = message_opt.unwrap();
                 if state.allows_rx() {
                     if pending_deliveries.len() >= config.smpp.max_pending_deliveries {
                         warn!(
                             peer = %peer,
-                            message_id = message_id.as_str(),
+                            message_id = msg.message_id_str(),
                             "delivery receipt skipped; pending delivery window full"
                         );
                     } else {
-                        let deliver = build_delivery_receipt(&submit, &message_id)?;
+                        let deliver = build_delivery_receipt(&msg)?;
                         let sequence = next_sequence_number(next_sequence);
                         let receipt = Command::new(CommandStatus::EsmeRok, sequence, deliver);
                         pending_deliveries
@@ -130,7 +136,7 @@ pub(super) async fn handle_command(
                                 peer,
                                 receipt,
                                 DeliverySource::Receipt {
-                                    message_id: message_id.as_str().to_string(),
+                                    message_id: msg.message_id_str().to_string(),
                                 },
                             )
                             .await?;

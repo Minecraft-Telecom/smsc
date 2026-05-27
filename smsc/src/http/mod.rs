@@ -64,8 +64,8 @@ async fn handle_submit(
     submit.set_short_message(short_message);
 
     match queue.enqueue(&submit) {
-        Ok(msg_id) => Ok(Json(SubmitResponse {
-            message_id: msg_id.as_str().to_string(),
+        Ok(msg) => Ok(Json(SubmitResponse {
+            message_id: msg.message_id_str().to_string(),
         })),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
